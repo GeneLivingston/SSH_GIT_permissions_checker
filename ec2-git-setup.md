@@ -1,6 +1,6 @@
-# Setting up a Git Repository on AWS EC2
+# Complete Guide: Setting up Git Repository on AWS EC2
 
-This guide walks through setting up a git repository on an EC2 instance, including SSH access configuration and proper permissions setup.
+This comprehensive guide walks through setting up a git repository on an EC2 instance, including SSH access configuration, proper permissions setup, and troubleshooting common issues.
 
 ## Prerequisites
 
@@ -13,29 +13,23 @@ This guide walks through setting up a git repository on an EC2 instance, includi
 AWS EC2 instances use a special authentication mechanism called EC2 Instance Connect that can interfere with standard SSH authentication. Here's what you need to know:
 
 1. EC2 Instance Connect:
-   - AWS injects authorized SSH keys via a special command: `/usr/share/ec2-instance-connect/eic_run_authorized_keys`
-   - This works for the default ubuntu user but can interfere with other users like git
-   - The interference shows up in logs as: `AuthorizedKeysCommand failed, status 22`
+   - AWS injects authorized SSH keys via `/usr/share/ec2-instance-connect/eic_run_authorized_keys`
+   - Works for ubuntu user but interferes with other users like git
+   - Shows in logs as: `AuthorizedKeysCommand failed, status 22`
 
 2. Standard SSH Auth:
-   - Normally looks for keys in `~/.ssh/authorized_keys`
-   - Works well for git user requirements
-   - Needs to be specifically configured to override EC2 Instance Connect
+   - Looks for keys in `~/.ssh/authorized_keys`
+   - Required for git user functionality
+   - Needs specific configuration to override EC2 Instance Connect
 
-3. Solution:
-   - Create a specific SSH config for git user
-   - Disable EC2 Instance Connect for git user only
-   - Keep EC2 Instance Connect working for ubuntu user
+## Initial Setup
 
-## 1. Initial EC2 Access
-
-Connect to your EC2 instance using your .pem key:
+### 1. Connect to EC2
 ```bash
 ssh -i /path/to/your-key.pem ubuntu@your-ec2-ip
 ```
 
-## 2. Setting up the Git User
-
+### 2. Set Up Git User
 ```bash
 # Create git user
 sudo useradd -m git
@@ -56,14 +50,12 @@ sudo chmod 700 /home/git/.ssh
 sudo chmod 755 /home/git/git-shell-commands
 ```
 
-## 3. Configure SSH Access
+### 3. Configure SSH Access for Git User
 
-### Critical: Override EC2 Instance Connect for Git User
-
-This is the most important step for making git user SSH access work:
-
+#### Critical: Override EC2 Instance Connect
 ```bash
-# Create specific SSH config for git user
+# Create git user SSH config
+sudo mkdir -p /etc/ssh/sshd_config.d
 sudo nano /etc/ssh/sshd_config.d/git-user.conf
 ```
 
@@ -74,28 +66,38 @@ Match User git
     AuthorizedKeysFile %h/.ssh/authorized_keys
 ```
 
-This configuration:
-- Only applies to the git user
-- Disables EC2 Instance Connect's key injection
-- Uses standard SSH key authentication
-- Preserves EC2 Instance Connect for ubuntu user
-
-Restart SSH service:
 ```bash
+# Set proper permissions
+sudo chmod 644 /etc/ssh/sshd_config.d/git-user.conf
+
+# Restart SSH service
 sudo service ssh restart
 ```
 
-### Set Up Authentication Keys
-
+#### Set Up Authentication Keys
 ```bash
-# Copy authorized_keys from ubuntu user to git user
+# Copy authorized_keys from ubuntu user
 sudo cp /home/ubuntu/.ssh/authorized_keys /home/git/.ssh/authorized_keys
 sudo chown git:git /home/git/.ssh/authorized_keys
 sudo chmod 600 /home/git/.ssh/authorized_keys
 ```
 
-### On Local Machine
+### 4. Set Up Git Repository
+```bash
+# Create repository directory
+sudo mkdir -p /srv/git
+sudo chown -R git:git /srv/git
+sudo chmod 755 /srv/git
 
+# Create bare repository
+cd /srv/git
+sudo git init --bare your-repo-name.git
+sudo chown -R git:git /srv/git/your-repo-name.git
+```
+
+## Local Machine Configuration
+
+### 1. SSH Config Setup
 Create or edit `~/.ssh/config`:
 ```bash
 Host ec2-git
@@ -105,63 +107,44 @@ Host ec2-git
     Port 22
 ```
 
-## 4. Setting up the Git Repository
-
+### 2. Test Connectivity
 ```bash
-# Create repository directory
-sudo mkdir -p /srv/git
-sudo chown -R git:git /srv/git
-sudo chmod 755 /srv/git
+# Test SSH (will fail with "Connection closed" - this is normal)
+ssh -v git@your-ec2-ip
 
-# Create the bare repository
-cd /srv/git
-sudo git init --bare your-repo-name.git
-sudo chown -R git:git /srv/git/your-repo-name.git
+# Test Git connectivity
+GIT_SSH_COMMAND="ssh -i /path/to/your-key.pem" git ls-remote git@your-ec2-ip:/srv/git/your-repo-name.git
 ```
 
-## 5. Testing the Setup
-
-From your local machine:
+### 3. Initialize Local Repository
 ```bash
-# Test SSH connection (will fail with "Connection closed" - this is normal)
-ssh ec2-git
+# Configure Git
+git config --global user.email "you@example.com"
+git config --global user.name "Your Name"
 
-# Test Git access
-git ls-remote git@your-ec2-ip:/srv/git/your-repo-name.git
-```
+# Create and initialize repository
+mkdir project-name
+cd project-name
+git init
+echo "# Project Name" > README.md
+git add README.md
+git commit -m "Initial commit"
 
-## 6. Using the Repository
-
-### Clone the Repository
-```bash
-git clone git@your-ec2-ip:/srv/git/your-repo-name.git
-```
-
-### Add Remote to Existing Repository
-```bash
+# Add remote
 git remote add origin git@your-ec2-ip:/srv/git/your-repo-name.git
+
+# Push (using master branch)
+GIT_SSH_COMMAND="ssh -i /path/to/your-key.pem" git push -u origin master
+
+# Or if you prefer main branch
+git branch -M main
+GIT_SSH_COMMAND="ssh -i /path/to/your-key.pem" git push -u origin main
 ```
 
-## 7. Troubleshooting
+## Troubleshooting
 
-### Common EC2-Specific Issues
-
-1. "AuthorizedKeysCommand failed, status 22"
-   - EC2 Instance Connect is still enabled for git user
-   - Check /etc/ssh/sshd_config.d/git-user.conf exists
-   - Verify config syntax is correct
-
-2. "Connection closed by authenticating user git [preauth]"
-   - Normal for direct SSH attempts due to git-shell
-   - Should still allow git commands
-
-3. "Permission denied (publickey)"
-   - Check key permissions
-   - Verify authorized_keys content matches your .pem public key
-   - Ensure git-user.conf is properly configured
-
-### Permission Issues
-Check these permissions if you encounter issues:
+### 1. Permission Issues
+Check these permissions:
 ```bash
 # On EC2 server
 ls -la /home/git/.ssh  # Should be 700
@@ -170,5 +153,108 @@ ls -la /srv/git  # Should be 755
 ls -la /srv/git/your-repo-name.git  # Should be owned by git:git
 ```
 
-### Connection Issues
-- Verify your local .pem file perm
+### 2. SSH Authentication Issues
+Monitor SSH logs:
+```bash
+sudo tail -f /var/log/auth.log
+```
+
+Common error messages and solutions:
+
+1. "Connection closed by authenticating user git [preauth]"
+   - Check /etc/ssh/sshd_config.d/git-user.conf exists
+   - Verify git-user.conf syntax
+   - Restart SSH service
+
+2. "AuthorizedKeysCommand failed, status 22"
+   - EC2 Instance Connect interference
+   - Check git-user.conf configuration
+   - Verify SSH configuration
+
+3. "Permission denied (publickey)"
+   - Check key permissions
+   - Verify authorized_keys content
+   - Check SSH config syntax
+
+### 3. Git Push Issues
+
+1. "src refspec main does not match any"
+   - Check current branch name: `git branch`
+   - Ensure you have commits: `git log`
+   - Use correct branch name (main or master)
+
+2. "error: failed to push some refs"
+   - Verify repository exists on server
+   - Check repository permissions
+   - Ensure correct remote URL
+
+### 4. Debug Commands
+```bash
+# Test SSH with verbose output
+ssh -vvv git@your-ec2-ip
+
+# Test Git with SSH debugging
+GIT_SSH_COMMAND="ssh -vvv" git ls-remote git@your-ec2-ip:/srv/git/your-repo-name.git
+
+# Check SSH process
+ps aux | grep sshd
+
+# Verify git shell
+grep git /etc/passwd
+```
+
+## Maintenance
+
+### Monitor Access
+```bash
+# Check SSH logs
+sudo journalctl -u ssh
+sudo tail -f /var/log/auth.log
+```
+
+### Repository Maintenance
+```bash
+# On EC2 server
+cd /srv/git/your-repo-name.git
+git gc --aggressive
+git fsck
+```
+
+### Backup Repository
+```bash
+cd /srv/git
+tar -czf backup-repos.tar.gz *.git
+```
+
+## Security Best Practices
+
+1. Keep .pem file secure (chmod 600)
+2. Use specific IP ranges in EC2 security groups
+3. Regularly update Ubuntu packages
+4. Monitor SSH access logs
+5. Keep git-shell-commands directory properly configured
+6. Use SSH key rotation
+7. Maintain proper file permissions
+
+## Reference Commands
+
+### Permission Verification
+```bash
+# Check all key permissions
+ls -la ~/.ssh/
+ls -la /path/to/your-key.pem  # Should be 600
+
+# Check repository permissions
+ls -la /srv/git/
+ls -la /srv/git/your-repo-name.git/
+```
+
+### SSH Configuration
+```bash
+# Check SSH configurations
+sudo cat /etc/ssh/sshd_config
+sudo ls -la /etc/ssh/sshd_config.d/
+
+# Restart SSH service
+sudo service ssh restart
+```
