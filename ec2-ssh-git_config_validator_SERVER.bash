@@ -1,181 +1,176 @@
 #!/bin/bash
-# remote_validator.sh
-# Validates remote server permissions for Git over SSH
+# remote_checker.sh - Check all remote SSH and Git configurations
 
-check_remote_permissions() {
+check_remote_setup() {
     local has_errors=0
+    local has_warnings=0
     
-    echo "=== Checking Remote Server Permissions ==="
+    echo "=== Remote Server Configuration Checker ==="
+    echo "Checking SSH, Git, and permissions configurations..."
     echo
 
-    # Check git user exists and shell
-    echo "Checking git user configuration..."
-    if ! id git >/dev/null 2>&1; then
-        echo "❌ git user does not exist"
-        has_errors=1
+    # Function to print status
+    print_status() {
+        local type="$1"
+        local message="$2"
+        if [ "$type" = "error" ]; then
+            echo "❌ ERROR: $message"
+            has_errors=1
+        elif [ "$type" = "warning" ]; then
+            echo "⚠️  WARNING: $message"
+            has_warnings=1
+        else
+            echo "✅ OK: $message"
+        fi
+    }
+
+    # Check if running as root
+    if [ "$EUID" -ne 0 ]; then
+        echo "Please run as root or with sudo"
+        exit 1
+    fi
+
+    # Check Git installation
+    echo "Checking Git Installation:"
+    echo "-----------------------"
+    if command -v git >/dev/null 2>&1; then
+        print_status "ok" "Git is installed"
     else
-        echo "✅ git user exists"
+        print_status "error" "Git is not installed"
+    fi
+
+    # Check git-shell installation
+    if command -v git-shell >/dev/null 2>&1; then
+        print_status "ok" "git-shell is installed"
+    else
+        print_status "error" "git-shell is not installed"
+    fi
+
+    # Check git user setup
+    echo -e "\nChecking Git User Configuration:"
+    echo "------------------------------"
+    if id git >/dev/null 2>&1; then
+        print_status "ok" "git user exists"
         
         # Check git user shell
         local git_shell=$(grep git /etc/passwd | cut -d: -f7)
-        if [[ "$git_shell" != *"git-shell"* ]]; then
-            echo "❌ git user should use git-shell, found: $git_shell"
-            has_errors=1
+        if [[ "$git_shell" == *"git-shell"* ]]; then
+            print_status "ok" "git user shell is git-shell"
         else
-            echo "✅ git user shell correct (git-shell)"
+            print_status "error" "git user shell is not git-shell: $git_shell"
         fi
+    else
+        print_status "error" "git user does not exist"
     fi
 
-    # Check git user home directory
-    echo -e "\nChecking git user home directory..."
-    if [ ! -d /home/git ]; then
-        echo "❌ /home/git directory does not exist"
-        has_errors=1
-    else
-        local home_perms=$(stat -c "%a" /home/git)
-        local home_owner=$(stat -c "%U:%G" /home/git)
+    # Check git user home directory structure
+    echo -e "\nChecking Git User Home Directory:"
+    echo "--------------------------------"
+    check_directory() {
+        local dir="$1"
+        local expected_perm="$2"
+        local expected_owner="$3"
         
-        if [ "$home_perms" != "755" ]; then
-            echo "❌ /home/git permissions should be 755, found: $home_perms"
-            has_errors=1
+        if [ -d "$dir" ]; then
+            local perms=$(stat -c "%a" "$dir")
+            local owner=$(stat -c "%U:%G" "$dir")
+            
+            if [ "$perms" = "$expected_perm" ]; then
+                print_status "ok" "$dir has correct permissions ($expected_perm)"
+            else
+                print_status "error" "$dir has incorrect permissions: $perms (should be $expected_perm)"
+            fi
+            
+            if [ "$owner" = "$expected_owner" ]; then
+                print_status "ok" "$dir has correct ownership ($expected_owner)"
+            else
+                print_status "error" "$dir has incorrect ownership: $owner (should be $expected_owner)"
+            fi
         else
-            echo "✅ /home/git permissions correct (755)"
+            print_status "error" "$dir does not exist"
         fi
-        
-        if [ "$home_owner" != "git:git" ]; then
-            echo "❌ /home/git ownership should be git:git, found: $home_owner"
-            has_errors=1
-        else
-            echo "✅ /home/git ownership correct (git:git)"
-        fi
-    fi
+    }
 
-    # Check .ssh directory
-    echo -e "\nChecking .ssh directory..."
-    if [ ! -d /home/git/.ssh ]; then
-        echo "❌ /home/git/.ssh directory does not exist"
-        has_errors=1
-    else
-        local ssh_perms=$(stat -c "%a" /home/git/.ssh)
-        local ssh_owner=$(stat -c "%U:%G" /home/git/.ssh)
-        
-        if [ "$ssh_perms" != "700" ]; then
-            echo "❌ /home/git/.ssh permissions should be 700, found: $ssh_perms"
-            has_errors=1
-        else
-            echo "✅ /home/git/.ssh permissions correct (700)"
-        fi
-        
-        if [ "$ssh_owner" != "git:git" ]; then
-            echo "❌ /home/git/.ssh ownership should be git:git, found: $ssh_owner"
-            has_errors=1
-        else
-            echo "✅ /home/git/.ssh ownership correct (git:git)"
-        fi
-    fi
+    check_directory "/home/git" "755" "git:git"
+    check_directory "/home/git/.ssh" "700" "git:git"
+    check_directory "/home/git/git-shell-commands" "755" "git:git"
 
-    # Check authorized_keys
-    echo -e "\nChecking authorized_keys..."
-    if [ ! -f /home/git/.ssh/authorized_keys ]; then
-        echo "❌ authorized_keys file does not exist"
-        has_errors=1
+    # Check SSH key configuration
+    echo -e "\nChecking SSH Configuration:"
+    echo "-------------------------"
+    if [ -f "/home/git/.ssh/authorized_keys" ]; then
+        local auth_perms=$(stat -c "%a" "/home/git/.ssh/authorized_keys")
+        local auth_owner=$(stat -c "%U:%G" "/home/git/.ssh/authorized_keys")
+        
+        if [ "$auth_perms" = "600" ]; then
+            print_status "ok" "authorized_keys has correct permissions (600)"
+        else
+            print_status "error" "authorized_keys has incorrect permissions: $auth_perms (should be 600)"
+        fi
+        
+        if [ "$auth_owner" = "git:git" ]; then
+            print_status "ok" "authorized_keys has correct ownership (git:git)"
+        else
+            print_status "error" "authorized_keys has incorrect ownership: $auth_owner (should be git:git)"
+        fi
     else
-        local auth_perms=$(stat -c "%a" /home/git/.ssh/authorized_keys)
-        local auth_owner=$(stat -c "%U:%G" /home/git/.ssh/authorized_keys)
-        
-        if [ "$auth_perms" != "600" ]; then
-            echo "❌ authorized_keys permissions should be 600, found: $auth_perms"
-            has_errors=1
-        else
-            echo "✅ authorized_keys permissions correct (600)"
-        fi
-        
-        if [ "$auth_owner" != "git:git" ]; then
-            echo "❌ authorized_keys ownership should be git:git, found: $auth_owner"
-            has_errors=1
-        else
-            echo "✅ authorized_keys ownership correct (git:git)"
-        fi
-    fi
-
-    # Check git-shell-commands directory
-    echo -e "\nChecking git-shell-commands..."
-    if [ ! -d /home/git/git-shell-commands ]; then
-        echo "❌ git-shell-commands directory does not exist"
-        has_errors=1
-    else
-        local cmd_perms=$(stat -c "%a" /home/git/git-shell-commands)
-        local cmd_owner=$(stat -c "%U:%G" /home/git/git-shell-commands)
-        
-        if [ "$cmd_perms" != "755" ]; then
-            echo "❌ git-shell-commands permissions should be 755, found: $cmd_perms"
-            has_errors=1
-        else
-            echo "✅ git-shell-commands permissions correct (755)"
-        fi
-        
-        if [ "$cmd_owner" != "git:git" ]; then
-            echo "❌ git-shell-commands ownership should be git:git, found: $cmd_owner"
-            has_errors=1
-        else
-            echo "✅ git-shell-commands ownership correct (git:git)"
-        fi
-    fi
-
-    # Check /srv/git directory
-    echo -e "\nChecking /srv/git directory..."
-    if [ ! -d /srv/git ]; then
-        echo "❌ /srv/git directory does not exist"
-        has_errors=1
-    else
-        local srv_perms=$(stat -c "%a" /srv/git)
-        local srv_owner=$(stat -c "%U:%G" /srv/git)
-        
-        if [ "$srv_perms" != "755" ]; then
-            echo "❌ /srv/git permissions should be 755, found: $srv_perms"
-            has_errors=1
-        else
-            echo "✅ /srv/git permissions correct (755)"
-        fi
-        
-        if [ "$srv_owner" != "git:git" ]; then
-            echo "❌ /srv/git ownership should be git:git, found: $srv_owner"
-            has_errors=1
-        else
-            echo "✅ /srv/git ownership correct (git:git)"
-        fi
+        print_status "error" "authorized_keys file does not exist"
     fi
 
     # Check EC2 Instance Connect configuration
-    echo -e "\nChecking EC2 Instance Connect configuration..."
-    if [ ! -f /etc/ssh/sshd_config.d/git-user.conf ]; then
-        echo "❌ git user SSH config not found"
-        has_errors=1
-    else
-        if ! grep -q "Match User git" /etc/ssh/sshd_config.d/git-user.conf; then
-            echo "❌ git user SSH configuration incomplete"
-            has_errors=1
+    echo -e "\nChecking EC2 Instance Connect Configuration:"
+    echo "-----------------------------------------"
+    if [ -f "/etc/ssh/sshd_config.d/git-user.conf" ]; then
+        if grep -q "Match User git" "/etc/ssh/sshd_config.d/git-user.conf"; then
+            print_status "ok" "git user SSH configuration exists"
+            
+            if grep -q "AuthorizedKeysCommand none" "/etc/ssh/sshd_config.d/git-user.conf"; then
+                print_status "ok" "AuthorizedKeysCommand is properly configured"
+            else
+                print_status "error" "AuthorizedKeysCommand configuration is missing or incorrect"
+            fi
+            
+            if grep -q "AuthorizedKeysFile %h/.ssh/authorized_keys" "/etc/ssh/sshd_config.d/git-user.conf"; then
+                print_status "ok" "AuthorizedKeysFile is properly configured"
+            else
+                print_status "error" "AuthorizedKeysFile configuration is missing or incorrect"
+            fi
         else
-            echo "✅ git user SSH configuration found"
+            print_status "error" "git user SSH configuration is incomplete"
         fi
+    else
+        print_status "error" "git user SSH configuration file does not exist"
     fi
 
-    echo
-    if [ $has_errors -eq 1 ]; then
-        echo "❌ Found permission issues that need to be fixed"
-        return 1
+    # Check repository directory
+    echo -e "\nChecking Git Repository Directory:"
+    echo "--------------------------------"
+    if [ -d "/srv/git" ]; then
+        check_directory "/srv/git" "755" "git:git"
+        
+        # Check for any bare repositories
+        local repos=$(find /srv/git -name "*.git" -type d)
+        if [ -n "$repos" ]; then
+            print_status "ok" "Found Git repositories"
+            for repo in $repos; do
+                check_directory "$repo" "755" "git:git"
+            done
+        else
+            print_status "warning" "No Git repositories found in /srv/git"
+        fi
     else
-        echo "✅ All remote permissions are correct"
-        return 0
+        print_status "error" "Repository directory /srv/git does not exist"
+    fi
+
+    # Print summary
+    echo -e "\nSummary:"
+    echo "--------"
+    if [ $has_errors -eq 1 ]; then
+        echo "❌ Found errors that need to be fixed"
+    elif [ $has_warnings -eq 1 ]; then
+        echo "⚠️  Found warnings that should be reviewed"
+    else
+        echo "✅ All checks passed successfully"
     fi
 }
-
-# Must be run as root or with sudo
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root or with sudo"
-    exit 1
-fi
-
-check_remote_permissions
-
 
