@@ -1,84 +1,119 @@
 #!/bin/bash
-# local_validator.sh
-# Validates local machine permissions for Git over SSH
+# local_checker.sh - Check all local SSH and Git configurations
 
-check_local_permissions() {
+check_local_setup() {
     local pem_file="$1"
     local has_errors=0
+    local has_warnings=0
     
-    echo "=== Checking Local Machine Permissions ==="
+    echo "=== Local Machine Configuration Checker ==="
+    echo "Checking SSH and Git configurations..."
     echo
 
-    # Check SSH config directory
-    echo "Checking ~/.ssh directory..."
+    # Function to print status
+    print_status() {
+        local type="$1"
+        local message="$2"
+        if [ "$type" = "error" ]; then
+            echo "❌ ERROR: $message"
+            has_errors=1
+        elif [ "$type" = "warning" ]; then
+            echo "⚠️  WARNING: $message"
+            has_warnings=1
+        else
+            echo "✅ OK: $message"
+        fi
+    }
+
+    # Check SSH directory
+    echo "Checking SSH Configuration:"
+    echo "-------------------------"
     if [ ! -d ~/.ssh ]; then
-        echo "❌ ~/.ssh directory does not exist"
-        has_errors=1
+        print_status "error" "SSH directory (~/.ssh) does not exist"
     else
         local ssh_perms=$(stat -c "%a" ~/.ssh)
-        if [ "$ssh_perms" != "700" ]; then
-            echo "❌ ~/.ssh permissions should be 700, found: $ssh_perms"
-            has_errors=1
+        if [ "$ssh_perms" = "700" ]; then
+            print_status "ok" "SSH directory permissions (700)"
         else
-            echo "✅ ~/.ssh permissions correct (700)"
+            print_status "error" "SSH directory has incorrect permissions: $ssh_perms (should be 700)"
         fi
     fi
 
-    # Check SSH config file
-    echo -e "\nChecking ~/.ssh/config..."
-    if [ ! -f ~/.ssh/config ]; then
-        echo "❌ ~/.ssh/config does not exist"
-        has_errors=1
-    else
+    # Check SSH config
+    if [ -f ~/.ssh/config ]; then
         local config_perms=$(stat -c "%a" ~/.ssh/config)
-        if [ "$config_perms" != "600" ]; then
-            echo "❌ ~/.ssh/config permissions should be 600, found: $config_perms"
-            has_errors=1
+        if [ "$config_perms" = "600" ]; then
+            print_status "ok" "SSH config file permissions (600)"
         else
-            echo "✅ ~/.ssh/config permissions correct (600)"
+            print_status "error" "SSH config has incorrect permissions: $config_perms (should be 600)"
         fi
 
-        # Check if git host is configured
-        if ! grep -q "Host.*git" ~/.ssh/config; then
-            echo "❌ No git host configuration found in ~/.ssh/config"
-            has_errors=1
+        # Check Git host configuration
+        if grep -q "Host.*git" ~/.ssh/config; then
+            print_status "ok" "Git host configuration found in SSH config"
         else
-            echo "✅ Git host configuration found in ~/.ssh/config"
+            print_status "warning" "No Git host configuration found in SSH config"
         fi
-    fi
-
-    # Check PEM file if provided
-    if [ ! -z "$pem_file" ]; then
-        echo -e "\nChecking PEM file ($pem_file)..."
-        if [ ! -f "$pem_file" ]; then
-            echo "❌ PEM file does not exist"
-            has_errors=1
-        else
-            local pem_perms=$(stat -c "%a" "$pem_file")
-            if [ "$pem_perms" != "600" ]; then
-                echo "❌ PEM file permissions should be 600, found: $pem_perms"
-                has_errors=1
-            else
-                echo "✅ PEM file permissions correct (600)"
-            fi
-        fi
-    fi
-
-    echo
-    if [ $has_errors -eq 1 ]; then
-        echo "❌ Found permission issues that need to be fixed"
-        return 1
     else
-        echo "✅ All local permissions are correct"
-        return 0
+        print_status "warning" "No SSH config file found"
+    fi
+
+    # Check PEM file
+    echo -e "\nChecking PEM Key File:"
+    echo "---------------------"
+    if [ ! -f "$pem_file" ]; then
+        print_status "error" "PEM file ($pem_file) not found"
+    else
+        local pem_perms=$(stat -c "%a" "$pem_file")
+        if [ "$pem_perms" = "600" ]; then
+            print_status "ok" "PEM file permissions (600)"
+        else
+            print_status "error" "PEM file has incorrect permissions: $pem_perms (should be 600)"
+        fi
+    fi
+
+    # Check Git configuration
+    echo -e "\nChecking Git Configuration:"
+    echo "-------------------------"
+    if command -v git >/dev/null 2>&1; then
+        print_status "ok" "Git is installed"
+        
+        # Check Git global configuration
+        if [ -f ~/.gitconfig ]; then
+            if git config --global user.name >/dev/null; then
+                print_status "ok" "Git user.name is configured"
+            else
+                print_status "warning" "Git user.name is not configured"
+            fi
+            
+            if git config --global user.email >/dev/null; then
+                print_status "ok" "Git user.email is configured"
+            else
+                print_status "warning" "Git user.email is not configured"
+            fi
+        else
+            print_status "warning" "No Git global configuration found"
+        fi
+    else
+        print_status "error" "Git is not installed"
+    fi
+
+    # Print summary
+    echo -e "\nSummary:"
+    echo "--------"
+    if [ $has_errors -eq 1 ]; then
+        echo "❌ Found errors that need to be fixed"
+    elif [ $has_warnings -eq 1 ]; then
+        echo "⚠️  Found warnings that should be reviewed"
+    else
+        echo "✅ All checks passed successfully"
     fi
 }
 
-# Usage
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /path/to/your/key.pem"
     exit 1
 fi
 
-check_local_permissions "$1"
+check_local_setup "$1"
 
